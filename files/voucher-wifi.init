@@ -1,0 +1,11 @@
+#!/bin/sh /etc/rc.common
+START=94
+STOP=10
+
+start() {
+  /usr/bin/voucher sync
+}
+
+stop() {
+  /usr/bin/voucher save
+}
