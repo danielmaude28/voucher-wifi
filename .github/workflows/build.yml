@@ -17,6 +17,8 @@ jobs:
 
       - name: Siapkan file paket
         run: |
+          mkdir voucher-wifi
+          cp -r Makefile files voucher-wifi/
           sed -i 's/^@@/\t/' voucher-wifi/Makefile
           touch voucher-wifi/files/vouchers.txt
           cd voucher-wifi/files
