@@ -57,7 +57,7 @@ uci set opennds.@opennds[0].gatewayname="$SSID"
 uci set opennds.@opennds[0].login_option_enabled='3'
 uci set opennds.@opennds[0].themespec_path='/usr/lib/opennds/theme_voucher.sh'
 
-uci commit network dhcp wireless firewall opennds
+uci commit
 chmod 744 /usr/lib/opennds/theme_voucher.sh
 /usr/bin/voucher sync
 
@@ -65,6 +65,15 @@ chmod 744 /usr/lib/opennds/theme_voucher.sh
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall restart
 wifi reload
+
+# Tunggu br-guest siap sebelum menyalakan openNDS
+n=0
+while [ "$n" -lt 30 ]; do
+  ip addr show br-guest 2>/dev/null | grep -q 'inet ' && break
+  sleep 2
+  n=$((n+1))
+done
+
 /etc/init.d/opennds enable
 /etc/init.d/opennds restart
 
