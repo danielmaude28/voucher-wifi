@@ -13,116 +13,42 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Buat file paket
+      - uses: actions/checkout@v4
+
+      - name: Siapkan file paket
         run: |
-          mkdir -p voucher-wifi/files
-          : > voucher-wifi/files/vouchers.txt
-
-          cat > voucher-wifi/Makefile <<'EOF_MK'
-          include $(TOPDIR)/rules.mk
-
-          PKG_NAME:=voucher-wifi
-          PKG_VERSION:=1.0.0
-          PKG_RELEASE:=1
-
-          include $(INCLUDE_DIR)/package.mk
-
-          define Package/voucher-wifi
-          @@SECTION:=net
-          @@CATEGORY:=Network
-          @@TITLE:=Sistem voucher wifi (openNDS) dengan CLI voucher
-          @@DEPENDS:=+opennds
-          @@PKGARCH:=all
-          endef
-
-          define Package/voucher-wifi/description
-          Portal voucher untuk wifi tamu berbasis openNDS theme_voucher,
-          lengkap dengan perintah voucher untuk setup dan membuat kode.
-          endef
-
-          define Package/voucher-wifi/conffiles
-          /etc/voucher-wifi/vouchers.txt
-          endef
-
-          define Build/Prepare
-          @@mkdir -p $(PKG_BUILD_DIR)
-          endef
-
-          define Build/Configure
-          endef
-
-          define Build/Compile
-          endef
-
-          define Package/voucher-wifi/install
-          @@$(INSTALL_DIR) $(1)/usr/bin $(1)/etc/init.d $(1)/usr/lib/opennds $(1)/etc/voucher-wifi
-          @@$(INSTALL_BIN) ./files/voucher $(1)/usr/bin/voucher
-          @@$(INSTALL_BIN) ./files/voucher-wifi.init $(1)/etc/init.d/voucher-wifi
-          @@$(INSTALL_BIN) ./files/theme_voucher.sh $(1)/usr/lib/opennds/theme_voucher.sh
-          @@$(INSTALL_DATA) ./files/vouchers.txt $(1)/etc/voucher-wifi/vouchers.txt
-          endef
-
-          define Package/voucher-wifi/postinst
-          #!/bin/sh
-          [ -n "$${IPKG_INSTROOT}" ] || /etc/init.d/voucher-wifi enable
-          exit 0
-          endef
-
-          $(eval $(call BuildPackage,voucher-wifi))
-          EOF_MK
           sed -i 's/^@@/\t/' voucher-wifi/Makefile
+          touch voucher-wifi/files/vouchers.txt
+          cd voucher-wifi/files
+          chmod +x voucher voucher-setup voucher-wifi.init
+          curl -fsSL -o theme_voucher.sh https://raw.githubusercontent.com/openNDS/openNDS/master/community/themespec/theme_voucher/theme_voucher.sh
+          test -s theme_voucher.sh
 
-          cat > voucher-wifi/files/voucher-wifi.init <<'EOF_INIT'
-          #!/bin/sh /etc/rc.common
-          START=94
-          STOP=10
+      - name: Pasang dependensi build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync unzip python3 zstd
 
-          start() {
-            /usr/bin/voucher sync
-          }
+      - name: Unduh OpenWrt SDK
+        run: |
+          BASE="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${TARGET}"
+          SDK=$(curl -fsSL "$BASE/" | grep -oE 'openwrt-sdk-[^"<> ]*\.tar\.(zst|xz)' | head -n1)
+          echo "SDK: $SDK"
+          curl -fsSLO "$BASE/$SDK"
+          mkdir sdk
+          tar -xf "$SDK" -C sdk --strip-components=1
 
-          stop() {
-            /usr/bin/voucher save
-          }
-          EOF_INIT
+      - name: Build paket
+        working-directory: sdk
+        run: |
+          cp -r ../voucher-wifi package/voucher-wifi
+          ./scripts/feeds update packages
+          ./scripts/feeds install opennds
+          make defconfig
+          make package/voucher-wifi/compile V=s
 
-          cat > voucher-wifi/files/voucher <<'EOF_CLI'
-          #!/bin/sh
-          # voucher - pengelola voucher wifi (openNDS theme_voucher)
-          # Format: kode,down_kbps,up_kbps,kuota_down,kuota_up,menit,0  (0 = tanpa batas)
-
-          MASTER=/etc/voucher-wifi/vouchers.txt
-          ROLL=/tmp/ndslog/vouchers.txt
-
-          usage() {
-            cat <<USAGE
-          Pemakaian:
-            voucher setup [NAMA_SSID]                 buat SSID tamu terbuka + portal voucher
-            voucher add MENIT [JUMLAH] [DOWN] [UP]    buat voucher (DOWN/UP kbit/s, 0 = bebas)
-            voucher list                              tampilkan voucher
-            voucher save                              simpan daftar voucher ke flash
-            voucher sync                              muat daftar voucher dari flash
-          Contoh:
-            voucher add 60 10
-            voucher add 1440 5 2000 1000
-          USAGE
-          }
-
-          gen() { tr -dc 'A-Z0-9' </dev/urandom | head -c4; }
-
-          is_num() { case "$1" in ''|*[!0-9]*) return 1;; esac; return 0; }
-
-          cmd_sync() {
-            mkdir -p /tmp/ndslog
-            [ -f "$MASTER" ] && cp "$MASTER" "$ROLL" || : > "$ROLL"
-            chmod 766 "$ROLL"
-          }
-
-          cmd_save() {
-            [ -f "$ROLL" ] && cp "$ROLL" "$MASTER"
-            return 0
-          }
-
-          cmd_add() {
-            menit="$1"; jumlah="${2:-1}"; down="${3:-0}"; up="${4:-0}"
-            is_num "$menit" && is_num "$jumlah" && is_num "$down" && is_num
+      - name: Unggah hasil
+        uses: actions/upload-artifact@v4
+        with:
+          name: voucher-wifi-apk
+          path: sdk/bin/packages/**/voucher-wifi*.apk
