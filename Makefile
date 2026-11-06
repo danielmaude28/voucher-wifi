@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=voucher-wifi
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -43,7 +43,13 @@ endef
 
 define Package/voucher-wifi/postinst
 #!/bin/sh
-[ -n "$${IPKG_INSTROOT}" ] || /etc/init.d/voucher-wifi enable
+if [ -z "$${IPKG_INSTROOT}" ]; then
+  /etc/init.d/voucher-wifi enable
+  uci -q set opennds.@opennds[0].gatewayinterface='br-guest'
+  uci -q commit opennds
+  /etc/init.d/opennds stop 2>/dev/null
+  /etc/init.d/opennds disable 2>/dev/null
+fi
 exit 0
 endef
 
