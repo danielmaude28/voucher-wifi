@@ -4,6 +4,18 @@ STOP=10
 
 start() {
   /usr/bin/voucher sync
+  # Setelah boot, tunggu br-guest siap, lalu pastikan openNDS hidup
+  (
+    n=0
+    while [ "$n" -lt 60 ]; do
+      ip addr show br-guest 2>/dev/null | grep -q 'inet ' && break
+      sleep 2
+      n=$((n+1))
+    done
+    sleep 60
+    [ "$(uci -q get opennds.@opennds[0].enabled)" = "1" ] || exit 0
+    ndsctl status >/dev/null 2>&1 || /etc/init.d/opennds restart
+  ) >/dev/null 2>&1 &
 }
 
 stop() {
