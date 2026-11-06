@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
 env:
   OPENWRT_VERSION: "25.12.6"
   TARGET: "ramips/mt76x8"
@@ -54,3 +57,12 @@ jobs:
         with:
           name: voucher-wifi-apk
           path: sdk/bin/packages/**/voucher-wifi*.apk
+
+      - name: Rilis publik supaya router bisa mengunduh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(find sdk/bin/packages -name 'voucher-wifi*.apk' | head -n1)
+          cp "$APK" voucher-wifi.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest voucher-wifi.apk --title "voucher-wifi terbaru" --notes "Build otomatis"
