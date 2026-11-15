@@ -3,7 +3,7 @@ name: Build voucher-wifi (.apk)
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, "fix/**"]
 
 permissions:
   contents: write
@@ -18,8 +18,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validasi sintaks shell
+        run: |
+          set -eu
+          sh -n files/voucher
+          sh -n files/voucher-setup
+          sh -n files/voucher-wifi.init
+
       - name: Siapkan file paket
         run: |
+          set -eu
           mkdir voucher-wifi
           cp -r Makefile files voucher-wifi/
           sed -i 's/^@@/\t/' voucher-wifi/Makefile
@@ -36,8 +44,10 @@ jobs:
 
       - name: Unduh OpenWrt SDK
         run: |
+          set -eu
           BASE="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${TARGET}"
           SDK=$(curl -fsSL "$BASE/" | grep -oE 'openwrt-sdk-[^"<> ]*\.tar\.(zst|xz)' | head -n1)
+          test -n "$SDK"
           echo "SDK: $SDK"
           curl -fsSLO "$BASE/$SDK"
           mkdir sdk
@@ -46,6 +56,7 @@ jobs:
       - name: Build paket
         working-directory: sdk
         run: |
+          set -eu
           cp -r ../voucher-wifi package/voucher-wifi
           ./scripts/feeds update packages
           ./scripts/feeds install opennds
@@ -57,12 +68,19 @@ jobs:
         with:
           name: voucher-wifi-apk
           path: sdk/bin/packages/**/voucher-wifi*.apk
+          if-no-files-found: error
 
       - name: Rilis publik supaya router bisa mengunduh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          APK=$(find sdk/bin/packages -name 'voucher-wifi*.apk' | head -n1)
+          set -eu
+          APK=$(find sdk/bin/packages -name 'voucher-wifi*.apk' -print -quit)
+          test -n "$APK"
           cp "$APK" voucher-wifi.apk
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest voucher-wifi.apk --title "voucher-wifi terbaru" --notes "Build otomatis"
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest voucher-wifi.apk --clobber
+            gh release edit latest --title "voucher-wifi terbaru" --notes "Build otomatis dari commit ${GITHUB_SHA}."
+          else
+            gh release create latest voucher-wifi.apk --title "voucher-wifi terbaru" --notes "Build otomatis dari commit ${GITHUB_SHA}." --target "$GITHUB_SHA"
+          fi
