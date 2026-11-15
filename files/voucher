@@ -4,6 +4,7 @@
 
 MASTER=/etc/voucher-wifi/vouchers.txt
 ROLL=/tmp/ndslog/vouchers.txt
+LOCK=/tmp/voucher-wifi.lock
 
 usage() {
   echo "Pemakaian:"
@@ -13,40 +14,122 @@ usage() {
   echo "Contoh: voucher add 60 10"
 }
 
-gen() { tr -dc 'A-Z0-9' </dev/urandom | head -c4; }
-is_num() { case "$1" in ''|*[!0-9]*) return 1;; esac; return 0; }
-
-cmd_sync() {
-  mkdir -p /tmp/ndslog
-  [ -f "$MASTER" ] && cp "$MASTER" "$ROLL" || : > "$ROLL"
-  chmod 766 "$ROLL"
+gen() {
+  tr -dc 'A-Z0-9' </dev/urandom | head -c 4
 }
 
-cmd_save() {
-  [ -f "$ROLL" ] && cp "$ROLL" "$MASTER"
+is_num() {
+  case "$1" in ''|*[!0-9]*) return 1;; esac
   return 0
 }
 
+in_range() {
+  is_num "$1" || return 1
+  [ "${#1}" -le 9 ] || return 1
+  [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+
+lock_files() {
+  n=0
+  while ! mkdir "$LOCK" 2>/dev/null; do
+    n=$((n + 1))
+    if [ "$n" -ge 10 ]; then
+      echo "Gagal mengunci data voucher; proses lain mungkin masih berjalan." >&2
+      return 1
+    fi
+    sleep 1
+  done
+  trap 'rmdir "$LOCK" 2>/dev/null || :' EXIT HUP INT TERM
+}
+
+unlock_files() {
+  rmdir "$LOCK" 2>/dev/null || :
+  trap - EXIT HUP INT TERM
+}
+
+prepare_files() {
+  mkdir -p /etc/voucher-wifi /tmp/ndslog
+  [ -f "$MASTER" ] || : > "$MASTER"
+  [ -f "$ROLL" ] || cp "$MASTER" "$ROLL"
+  chmod 600 "$MASTER" "$ROLL"
+}
+
+cmd_sync() {
+  mkdir -p /etc/voucher-wifi /tmp/ndslog
+  lock_files || return 1
+  # Jangan menimpa roll yang sedang aktif: openNDS menyimpan status voucher
+  # terpakai pada kolom terakhir di file roll.
+  if [ ! -e "$ROLL" ]; then
+    [ -f "$MASTER" ] && cp "$MASTER" "$ROLL" || : > "$ROLL"
+  fi
+  [ -f "$MASTER" ] || : > "$MASTER"
+  chmod 600 "$MASTER" "$ROLL"
+  unlock_files
+}
+
+cmd_save() {
+  [ -f "$ROLL" ] || return 0
+  mkdir -p /etc/voucher-wifi
+  lock_files || return 1
+  tmp="${MASTER}.tmp.$$"
+  if cp "$ROLL" "$tmp"; then
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$MASTER"
+  else
+    rm -f "$tmp"
+    unlock_files
+    return 1
+  fi
+  unlock_files
+}
+
 cmd_add() {
-  menit="$1"; jumlah="${2:-1}"; down="${3:-0}"; up="${4:-0}"
-  is_num "$menit" && is_num "$jumlah" && is_num "$down" && is_num "$up" || { usage; exit 1; }
-  [ -f "$ROLL" ] || cmd_sync
+  menit="${1:-}"
+  jumlah="${2:-1}"
+  down="${3:-0}"
+  up="${4:-0}"
+
+  in_range "$menit" 1 525600 &&
+  in_range "$jumlah" 1 500 &&
+  in_range "$down" 0 100000000 &&
+  in_range "$up" 0 100000000 || {
+    echo "Parameter tidak valid. Menit: 1-525600, jumlah: 1-500, batas kecepatan: 0-100000000 kbps." >&2
+    usage
+    return 1
+  }
+
+  prepare_files
+  lock_files || return 1
   i=0
   while [ "$i" -lt "$jumlah" ]; do
-    kode="$(gen)-$(gen)"
+    attempt=0
+    while :; do
+      kode="$(gen)-$(gen)"
+      [ "${#kode}" -eq 9 ] || { attempt=$((attempt + 1)); [ "$attempt" -lt 20 ] || { unlock_files; return 1; }; continue; }
+      if ! awk -F, -v code="$kode" '$1 == code { found=1 } END { exit found ? 0 : 1 }' "$ROLL" &&
+         ! awk -F, -v code="$kode" '$1 == code { found=1 } END { exit found ? 0 : 1 }' "$MASTER"; then
+        break
+      fi
+      attempt=$((attempt + 1))
+      [ "$attempt" -lt 20 ] || { echo "Gagal membuat kode unik." >&2; unlock_files; return 1; }
+    done
+
     baris="$kode,$down,$up,0,0,$menit,0"
-    echo "$baris" >> "$ROLL"
-    echo "$baris" >> "$MASTER"
+    if ! printf '%s\n' "$baris" >> "$ROLL" || ! printf '%s\n' "$baris" >> "$MASTER"; then
+      echo "Gagal menyimpan voucher: $kode" >&2
+      unlock_files
+      return 1
+    fi
     echo "$kode  ($menit menit)"
-    i=$((i+1))
+    i=$((i + 1))
   done
+  chmod 600 "$MASTER" "$ROLL"
+  unlock_files
 }
 
 cmd_list() {
-  [ -f "$ROLL" ] || cmd_sync
-  cut -d, -f1,6 "$ROLL" | tr ',' ' ' | while read -r k m; do
-    printf '%-12s %s menit\n' "$k" "$m"
-  done
+  [ -f "$ROLL" ] || cmd_sync || return 1
+  awk -F, 'NF >= 6 { printf "%-12s %s menit\n", $1, $6 }' "$ROLL"
 }
 
 case "$1" in
@@ -55,5 +138,5 @@ case "$1" in
   list)  cmd_list;;
   save)  cmd_save;;
   sync)  cmd_sync;;
-  *)     usage;;
+  *)     usage; exit 1;;
 esac
